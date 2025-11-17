@@ -40,7 +40,7 @@ rmagine::EmbreeGeometryPtr to_rm_embree(const msgs::PlaneGeom& plane)
     scale.z = 1.0;
     mesh->setScale(scale);
 
-    return mesh;   
+    return mesh;
 }
 
 rmagine::EmbreeGeometryPtr to_rm_embree(const msgs::BoxGeom& box)
@@ -73,7 +73,7 @@ rmagine::EmbreeGeometryPtr to_rm_embree(const msgs::CylinderGeom& cylinder)
     float radius = cylinder.radius();
     float diameter = radius * 2.0;
     float height = cylinder.length();
-    
+
     mesh->setScale({diameter, diameter, height});
 
     return mesh;
@@ -84,7 +84,7 @@ rmagine::EmbreeGeometryPtr to_rm_embree(const msgs::HeightmapGeom& heightmap)
     rmagine::EmbreeGeometryPtr ret;
 
     // print(heightmap);
-    
+
     rm::Vector3 size = to_rm(heightmap.size());
     rm::Vector3 orig = to_rm(heightmap.origin());
 
@@ -95,7 +95,7 @@ rmagine::EmbreeGeometryPtr to_rm_embree(const msgs::HeightmapGeom& heightmap)
         filename = common::SystemPaths::Instance()->FindFileURI(filename);
     }
 
-    common::HeightmapData* data 
+    common::HeightmapData* data
         = common::HeightmapDataLoader::LoadTerrainFile(filename);
 
     if(data)
@@ -106,6 +106,30 @@ rmagine::EmbreeGeometryPtr to_rm_embree(const msgs::HeightmapGeom& heightmap)
         gzdbg << "- height: " << data->GetHeight() << std::endl;
         gzdbg << "- width: " << data->GetWidth() << std::endl;
         gzdbg << "- max_elevation: " << data->GetMaxElevation() << std::endl;
+
+        // The min terrain elevation is needed to calculate the elevation range
+        // because not all heightmaps start at zero.
+        float min_elevation = 0;
+
+        // The heightmap file can be an image (JPEG or PNG) or a DEM.
+        // common::HeightmapData does not provide GetMinElevation().
+        // This is likely because common::Image lacks a MinColor() method, and
+        // the Gazebo developers chose not to implement GetMinElevation() in
+        // common::ImageHeightmap.
+        // In contrast, common::Dem implements GetMinElevation(), so when the
+        // heightmap file is a DEM, it is possible to directly get its minimum
+        // elevation.
+        common::Dem* dem = dynamic_cast<common::Dem*>(data);
+        if (dem != nullptr)
+        {
+            gzdbg << "- min_elevation: " << dem->GetMinElevation() << std::endl;
+            min_elevation = dem->GetMinElevation();
+        }
+        else {
+            // TODO: if the heightmap file is an image, open the image as a
+            // common::Image and calculate MinColor
+            gzdbg << "- Could not parse min_elevation. Using 0.0 " << std::endl;
+        }
 
         std::vector<float> elevations;
         // fill heights
@@ -123,18 +147,19 @@ rmagine::EmbreeGeometryPtr to_rm_embree(const msgs::HeightmapGeom& heightmap)
         // scale. or: size of one pixel
         scale.X(size.X() / vertSize);
         scale.Y(size.Y() / vertSize);
-        if(ignition::math::equal(data->GetMaxElevation(), 0.0f)) 
+        float height_range = data->GetMaxElevation() - min_elevation;
+        if(ignition::math::equal(height_range, 0.0f))
         {
             scale.Z(fabs(size.Z()));
         } else {
-            scale.Z(fabs(size.Z()) / data->GetMaxElevation());
+            scale.Z(fabs(size.Z()) / height_range);
         }
 
         bool flipY = true;
         data->FillHeightMap(subsampling, vertSize, size, scale, flipY, elevations);
 
         gzdbg << "Loaded " << elevations.size() << " elevations." << std::endl;
-        
+
         // NEXT: make mesh
         // - we need one vertex per elevation
         // - we need 1 quad for 4 vertices neighbors
@@ -142,8 +167,8 @@ rmagine::EmbreeGeometryPtr to_rm_embree(const msgs::HeightmapGeom& heightmap)
         //   -> (W-1)*(H-1)*2 triangles
 
         rm::EmbreeMeshPtr mesh = std::make_shared<rm::EmbreeMesh>(
-            data->GetWidth() * data->GetHeight(), 
-            2 * (data->GetWidth() - 1) * (data->GetHeight() - 1) 
+            data->GetWidth() * data->GetHeight(),
+            2 * (data->GetWidth() - 1) * (data->GetHeight() - 1)
         );
 
         rm::Vector3 offset = to_rm(heightmap.origin());
@@ -151,13 +176,10 @@ rmagine::EmbreeGeometryPtr to_rm_embree(const msgs::HeightmapGeom& heightmap)
         float half_width = size.X() / 2.0;
         float half_height = size.Y() / 2.0;
 
-
-        
-        
         rm::Vector3 correction = {0.0, 0.0, 0.0};
 
         int center_vert = vertSize / 2;
-        
+
         auto mesh_vertices = mesh->vertices();
 
         gzdbg << "Filling " << mesh_vertices.size() << " vertices..." << std::endl;
@@ -170,7 +192,7 @@ rmagine::EmbreeGeometryPtr to_rm_embree(const msgs::HeightmapGeom& heightmap)
                 // in grid coords
                 size_t buff_id = yimg * vertSize + ximg;
                 float height = elevations[buff_id];
-                
+
                 // grid origin is (0,0) at (ximg, yimg) = (vertSize/2, vertSize/2)
                 // example 5x5 img, image id (2,2) is grid id (0,0)
                 int xgrid = static_cast<int>(ximg) - center_vert;
@@ -268,7 +290,7 @@ rmagine::EmbreeScenePtr to_rm_embree_assimp(const msgs::MeshGeom& gzmesh)
             rm::Vector3 scale = to_rm(gzmesh.scale());
             for(auto elem : scene->geometries())
             {
-                auto geom = elem.second;   
+                auto geom = elem.second;
                 geom->setScale(geom->scale().multEwise(scale));
             }
         } else {
@@ -277,7 +299,7 @@ rmagine::EmbreeScenePtr to_rm_embree_assimp(const msgs::MeshGeom& gzmesh)
     } else {
         gzwarn << "WARNING Assimp Import: number of meshes == 0" << std::endl;
     }
-    
+
     return scene;
 }
 
@@ -300,7 +322,7 @@ rm::EmbreeScenePtr to_rm_embree(
     {
         const common::SubMesh* gzsubmesh = gzmesh->GetSubMesh(i);
         gzdbg << "SUBMESH " << i << std::endl;
-        gzdbg << "-- name: " << gzsubmesh->GetName() << std::endl; 
+        gzdbg << "-- name: " << gzsubmesh->GetName() << std::endl;
         gzdbg << "-- vertices: " << gzsubmesh->GetVertexCount() << std::endl;
         gzdbg << "-- normals: " << gzsubmesh->GetNormalCount() << std::endl;
         gzdbg << "-- indices: " << gzsubmesh->GetIndexCount() << std::endl;
@@ -309,16 +331,16 @@ rm::EmbreeScenePtr to_rm_embree(
         gzdbg << "-- node assignments: " << gzsubmesh->GetNodeAssignmentsCount() << std::endl;
         gzdbg << "-- mat index: " << gzsubmesh->GetMaterialIndex() << std::endl;
         gzdbg << "-- min, max: " << to_rm(gzsubmesh->Min()) << ", " << to_rm(gzsubmesh->Max()) << std::endl;
-    
+
         if(gzsubmesh->GetPrimitiveType() == common::SubMesh::PrimitiveType::TRIANGLES)
         {
 
             rm::EmbreeMeshPtr mesh = std::make_shared<rm::EmbreeMesh>(
-                gzsubmesh->GetVertexCount(), 
+                gzsubmesh->GetVertexCount(),
                 gzsubmesh->GetIndexCount() / 3);
 
             // TODO fill
-            
+
             gzdbg << "Converting vertices" << std::endl;
             auto mesh_vertices = mesh->vertices();
             for(size_t i=0; i<mesh_vertices.size(); i++)
@@ -344,7 +366,7 @@ rm::EmbreeScenePtr to_rm_embree(
                 mesh->initVertexNormals();
 
                 auto mesh_vertex_normals = mesh->vertexNormals();
-                
+
                 for(size_t i=0; i<mesh_vertex_normals.size(); i++)
                 {
                     mesh_vertex_normals[i] = to_rm(gzsubmesh->Normal(i));
@@ -414,7 +436,7 @@ rmagine::EmbreeScenePtr to_rm_embree_gazebo(const msgs::MeshGeom& gzmesh)
         rm::Vector3 scale = to_rm(gzmesh.scale());
         for(auto elem : ret->geometries())
         {
-            auto geom = elem.second;   
+            auto geom = elem.second;
             geom->setScale(geom->scale().multEwise(scale));
             geom->apply();
         }
