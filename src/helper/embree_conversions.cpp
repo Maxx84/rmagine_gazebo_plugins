@@ -11,6 +11,7 @@
 #include <gazebo/common/URI.hh>
 #include <gazebo/common/SystemPaths.hh>
 #include <gazebo/common/CommonIface.hh>
+#include <gazebo/common/Dem.hh>
 #include <gazebo/common/HeightmapData.hh>
 
 #include <gazebo/common/MeshManager.hh>
