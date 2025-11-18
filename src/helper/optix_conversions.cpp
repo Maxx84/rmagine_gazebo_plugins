@@ -14,6 +14,7 @@
 #include <gazebo/common/URI.hh>
 #include <gazebo/common/SystemPaths.hh>
 #include <gazebo/common/CommonIface.hh>
+#include <gazebo/common/Dem.hh>
 #include <gazebo/common/HeightmapData.hh>
 
 #include <gazebo/common/MeshManager.hh>
@@ -94,7 +95,7 @@ rmagine::OptixGeometryPtr to_rm_optix(const msgs::CylinderGeom& cylinder)
     float radius = cylinder.radius();
     float diameter = radius * 2.0;
     float height = cylinder.length();
-    
+
     mesh->setScale({diameter, diameter, height});
 
     return mesh;
@@ -113,7 +114,7 @@ rmagine::OptixGeometryPtr to_rm_optix(const msgs::HeightmapGeom& heightmap)
         filename = common::SystemPaths::Instance()->FindFileURI(filename);
     }
 
-    common::HeightmapData* data 
+    common::HeightmapData* data
         = common::HeightmapDataLoader::LoadTerrainFile(filename);
 
     if(data)
@@ -125,6 +126,29 @@ rmagine::OptixGeometryPtr to_rm_optix(const msgs::HeightmapGeom& heightmap)
         gzdbg << "[RmagineOptixMap] - width: " << data->GetWidth() << std::endl;
         gzdbg << "[RmagineOptixMap] - max_elevation: " << data->GetMaxElevation() << std::endl;
 
+        // The min terrain elevation is needed to calculate the elevation range
+        // because not all heightmaps start at zero.
+        float min_elevation = 0;
+
+        // The heightmap file can be an image (JPEG or PNG) or a DEM.
+        // common::HeightmapData does not provide GetMinElevation().
+        // This is likely because common::Image lacks a MinColor() method, and
+        // the Gazebo developers chose not to implement GetMinElevation() in
+        // common::ImageHeightmap.
+        // In contrast, common::Dem implements GetMinElevation(), so when the
+        // heightmap file is a DEM, it is possible to directly get its minimum
+        // elevation.
+        common::Dem* dem = dynamic_cast<common::Dem*>(data);
+        if (dem != nullptr)
+        {
+            gzdbg << "[RmagineOptixMap] - min_elevation: " << dem->GetMinElevation() << std::endl;
+            min_elevation = dem->GetMinElevation();
+        }
+        else {
+            // TODO: if the heightmap file is an image, open the image as a
+            // common::Image and calculate MinColor
+            gzdbg << "[RmagineOptixMap] - Could not parse min_elevation. Using 0.0 " << std::endl;
+        }
 
         std::vector<float> elevations;
         // fill heights
@@ -142,18 +166,19 @@ rmagine::OptixGeometryPtr to_rm_optix(const msgs::HeightmapGeom& heightmap)
         // scale. or: size of one pixel
         scale.X(size.X() / vertSize);
         scale.Y(size.Y() / vertSize);
-        if(ignition::math::equal(data->GetMaxElevation(), 0.0f)) 
+        float height_range = data->GetMaxElevation() - min_elevation;
+        if(ignition::math::equal(height_range, 0.0f))
         {
             scale.Z(fabs(size.Z()));
         } else {
-            scale.Z(fabs(size.Z()) / data->GetMaxElevation());
+            scale.Z(fabs(size.Z()) / height_range);
         }
 
         bool flipY = true;
         data->FillHeightMap(subsampling, vertSize, size, scale, flipY, elevations);
 
         gzdbg << "[RmagineOptixMap] Loaded " << elevations.size() << " elevations." << std::endl;
-        
+
         rm::OptixMeshPtr mesh = std::make_shared<rm::OptixMesh>();
 
         rm::Memory<rm::Vector3, rm::RAM> vertices(data->GetWidth() * data->GetHeight());
@@ -166,7 +191,7 @@ rmagine::OptixGeometryPtr to_rm_optix(const msgs::HeightmapGeom& heightmap)
         float half_height = size.Y() / 2.0;
 
         gzdbg << "[RmagineOptixMap] Filling " << vertices.size() << " vertices..." << std::endl;
-        
+
         rm::Vector3 correction = {0.0, 0.0, 0.0};
 
         int center_vert = vertSize / 2;
@@ -246,7 +271,7 @@ rm::OptixScenePtr to_rm_optix(
     const common::Mesh* gzmesh)
 {
     rm::OptixScenePtr ret = std::make_shared<rm::OptixScene>();
-    
+
     gzdbg << "[RmagineOptixMap] GAZEBO mesh loaded: " << std::endl;
     gzdbg << "[RmagineOptixMap] - name: " << gzmesh->GetName() << std::endl;
     gzdbg << "[RmagineOptixMap] - vertices: " << gzmesh->GetVertexCount() << std::endl;
@@ -271,7 +296,7 @@ rm::OptixScenePtr to_rm_optix(
         gzdbg << "[RmagineOptixMap] -- node assignments: " << gzsubmesh->GetNodeAssignmentsCount() << std::endl;
         gzdbg << "[RmagineOptixMap] -- mat index: " << gzsubmesh->GetMaterialIndex() << std::endl;
         gzdbg << "[RmagineOptixMap] -- min, max: " << to_rm(gzsubmesh->Min()) << ", " << to_rm(gzsubmesh->Max()) << std::endl;
-    
+
         if(gzsubmesh->GetPrimitiveType() == common::SubMesh::PrimitiveType::TRIANGLES)
         {
             rm::OptixMeshPtr mesh = std::make_shared<rm::OptixMesh>();
@@ -345,7 +370,7 @@ rm::OptixScenePtr to_rm_optix(
     //         mesh_inst->apply();
     //         insts->add(mesh_inst);
     //     }
-        
+
     //     insts->name = gzmesh->GetName();
     //     insts->commit();
 
@@ -401,7 +426,7 @@ rmagine::OptixScenePtr to_rm_optix_assimp(const msgs::MeshGeom& gzmesh)
     gzdbg << "[RmagineOptixMap] Assimp Import: Loading mesh from file " << filename << std::endl;
 
     rm::AssimpIO io;
-    const aiScene* ascene = io.ReadFile(filename, 
+    const aiScene* ascene = io.ReadFile(filename,
         aiProcess_Triangulate);
 
     if(ascene)
@@ -416,7 +441,7 @@ rmagine::OptixScenePtr to_rm_optix_assimp(const msgs::MeshGeom& gzmesh)
         gzwarn << "[RmagineOptixMap] WARNING Assimp Import: could not load mesh from " << filename << std::endl;
         gzwarn << io.Importer::GetErrorString() << std::endl;
     }
-    
+
     return ret;
 }
 
